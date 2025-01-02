@@ -1,0 +1,93 @@
+#Arrays like stage_weights have already been defined in earlier code
+
+
+def compute_std_for_stage(j, step_count, num_trials, bound_size, stage_weights):
+    if j <= step_count:
+        return bound_size * (stage_weights[0] - stage_weights[1] * j / step_count)
+    elif j <= 2 * step_count:
+        return bound_size * (
+            stage_weights[2]
+            - stage_weights[3] * (j - step_count) / step_count
+        )
+    else:
+        return bound_size * (
+            stage_weights[4]
+            - stage_weights[5] * (j - 2 * step_count) / (num_trials - 2 * step_count)
+        )
+
+# Generalized log_prior
+def log_prior(theta, bounds):
+
+    if np.any(theta < np.array(bounds)[:, 0]) or np.any(theta > np.array(bounds)[:, 1]):
+        return -np.inf
+    return 0
+
+# Generalized log_posterior
+def log_posterior(theta, log_likelihood_func, bounds):
+    return log_likelihood(theta) + log_prior(theta, bounds)
+
+# Generalized MCMC sampler
+def run_mcmc(log_likelihood_func, config):
+    bounds = config["posterior_bounds"]
+    step_count = config["step_count"]
+    num_chains = config["num_chains"]
+    num_trials_per_chain = config["num_trials_per_chain"]
+    burn_count = config["burn_count"]
+    thin_interval = config["thin_interval"]
+    bound_size = config["bound_size"]
+
+    # Initialize chains
+    all_chain_initial_params = [
+        [np.random.uniform(bounds[j][0], bounds[j][1]) for j in range(len(bounds))]
+        for _ in range(num_chains)
+    ]
+
+    all_chain_sample_params = []
+    acceptance_rates = []
+
+    for chain in range(num_chains):
+        current_params = all_chain_initial_params[chain]
+        sample_params = []
+        acceptance_counter = 0
+        rejection_counter = 0
+
+        for trial in range(num_trials_per_chain):
+            stds_for_selecting_points = compute_std_for_stage(
+                trial, step_count, num_trials_per_chain, bound_size, stage_weights
+            )
+            error_scale = np.diag(stds_for_selecting_points**2)
+            next_params = np.random.multivariate_normal(current_params, error_scale)
+
+            log_current_posterior = log_posterior(
+                current_params, log_likelihood_func, bounds
+            )
+            log_next_posterior = log_posterior(
+                next_params, log_likelihood_func, bounds
+            )
+
+            if np.isfinite(log_current_posterior) and np.isfinite(log_next_posterior):
+                quotient = np.exp(log_next_posterior - log_current_posterior)
+                if quotient >= 1 or np.random.uniform(0, 1) <= quotient:
+                    current_params = next_params.copy()
+                    acceptance_counter += 1
+                else:
+                    rejection_counter += 1
+            sample_params.append(current_params.copy())
+
+        # Burn-in and thinning
+        sample_params = sample_params[burn_count:]
+        sample_params = sample_params[::thin_interval]
+
+        all_chain_sample_params.append(sample_params)
+        acceptance_rates.append(
+            acceptance_counter / (acceptance_counter + rejection_counter)
+        )
+
+    # Combine all samples
+    all_samples = np.vstack(all_chain_sample_params)
+
+    return all_samples, acceptance_rates
+
+# Example usage
+all_samples, acceptance_rates = run_mcmc(log_likelihood, mcmc_config)
+print("Acceptance rates per chain:", acceptance_rates)
